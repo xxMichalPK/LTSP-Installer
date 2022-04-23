@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+
+# LTSP Installer was created to automate and speed up the installation and configuration
+# process of the Linux Terminal Server Project (see: <https://ltsp.org/>)
+# Github: <https://github.com/xxMichalPK>
+#
+#	Copyright (C) 2022 Michał Pazurek
+#
+#	This program is free software: you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#    	the Free Software Foundation, either version 3 of the License, or
+#    	(at your option) any later version.
+#
+#    	This program is distributed in the hope that it will be useful,
+#    	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    	GNU General Public License for more details.
+#	
+#    	You should have received a copy of the GNU General Public License
+#    	along with this program.  If not, see <http://www.gnu.org/licenses/>
+
+# Help Function
+Help() {
+	echo "Syntax: ./LTSP-Installer [-s|n|h]"
+	echo "options:"
+	echo "-s [network interface]	Sets the destination network interface of the server."
+	echo "-n [network interface]	Sets the network interface with internet connection."
+	echo "-h			Displays help."
+	echo
+	echo "Example:"
+	echo "./LTSP-Installer -s eth0 -n wlan1"
+	echo
+}
+
+StartMsg() {
+	echo
+	echo "    ██╗  ████████╗███████╗██████╗ "
+	echo "    ██║  ╚══██╔══╝██╔════╝██╔══██╗"
+	echo "    ██║     ██║   ███████╗██████╔╝"
+	echo "    ██║     ██║   ╚════██║██╔═══╝ "
+	echo "    ███████╗██║   ███████║██║     "
+	echo "    ╚══════╝╚═╝   ╚══════╝╚═╝     "
+	echo "              INSTALLER           "
+	echo "          by Michał Pazurek       "
+	echo "    https://github.com/xxMichalPK "
+	echo
+}
+
+# Check if user is root
+if [ "$EUID" -ne 0 ]
+	then echo "Please run this program as root!"
+	exit
+fi
+
+# Variables to be set
+SRV_IF=""
+NET_IF=""
+
+# Getting options
+while getopts ":hsn" option; do
+        case $option in
+                h) # Display Help
+			StartMsg
+                        Help
+                        exit;;
+		s) # Setting SRV_IF
+			SRV_IF=$OPTARG;;
+		n) # Setting NET_IF
+			NET_IF=$OPTARG;;
+                \?) # Option does not exist
+                        echo "Invalid option. Use -h to display help."
+                        exit;;
+        esac
+done
+
+StartMsg
+
+# Adding LTSP repository to system
+add-apt-repository ppa:ltsp
+
+# Installing needed programs
+apt install --install-recommends ltsp ltsp-binaries dnsmasq nfs-kernel-server openssh-server squashfs-tools ethtool net-tools epoptes -y
+
+# Setting proper network interface
+ifconfig $SRV_IF 192.168.67.1 netmask 255.255.255.0
+
+# Configuring LTSP (see:"https://ltsp.org/docs/installation/")
+ltsp dnsmasq -d1 -p0 --dns-server="192.168.67.1 8.8.8.8 208.67.222.222"
+ltsp image /
+ltsp ipxe
+ltsp nfs
+ltsp initrd
+
+# Adding proper entries into /etc/dnsmasq.conf file
+cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
+echo "interface=$SRV_IF" >> /etc/dnsmasq.conf
+echo "dhcp-authoritative" >> /etc/dnsmasq.conf
+echo "dhcp-range=192.168.67.1,static" >> /etc/dnsmasq.conf
+echo "server=192.168.67.1@$NET_IF" >> /etc/dnsmasq.conf
+echo "local=/home/" >> /etc/dnsmasq.conf
+echo "dhcp-option=option:router,192.168.67.1" >> /etc/dnsmasq.conf
+
+# Setting IP Tables
+iptables -A FORWARD -i $SRV_IF -o $NET_IF -s 192.168.67.0/24 -m conntrack --ctstate NEW -j ACCEPT
+iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A POSTROUTING -t nat -j MASQUERADE
+
+# Restarting dnsmasq service
+systemctl restart dnsmasq
+
+# Display End message
+echo
+echo "Installing and Configuring LTSP Ended Successfuly!"
+echo "Thank you for using my installer."
